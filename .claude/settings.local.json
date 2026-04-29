@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python -c \"import sqlite_vec; print\\('sqlite_vec ok', sqlite_vec.version\\(\\)\\)\")",
       "Bash(python -c \"from sentence_transformers import SentenceTransformer; print\\('sentence_transformers ok'\\)\")",
-      "Bash(python -c \"from fastembed import TextEmbedding; print\\('fastembed ok'\\)\")"
+      "Bash(python -c \"from fastembed import TextEmbedding; print\\('fastembed ok'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat: add prompt injection defense \\(untrusted labeling + heuristic detection\\) *)"
     ]
   }
 }

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="miniclaw-feishu_logo.jpg" alt="miniclaw" width="500">
+  <img src="miniclaw.png" alt="miniclaw" width="500">
 </div>
 
 # 🐈 miniclaw-feishu: Feishu-Specialized miniclaw Fork
