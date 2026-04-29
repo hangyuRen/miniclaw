@@ -239,6 +239,7 @@ class ProceduralMemoryConfig(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     top_k: int = 3                      # Max procedures injected per turn
+    thresh: float = 0.5                 # Retrieve threshhold
     evaluate_system_messages: bool = False  # Also evaluate cron/heartbeat tasks
 
 

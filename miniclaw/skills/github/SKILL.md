@@ -1,9 +1,3 @@
-<!--
- * @Author: hyuren
- * @Date: 2026-04-23 10:51:45
- * @LastEditTime: 2026-04-23 11:11:17
- * @Description: 
--->
 ---
 name: github
 description: "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries."

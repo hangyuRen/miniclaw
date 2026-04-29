@@ -48,6 +48,57 @@ If not worth saving:
 {{"save": false, "reason": "<one sentence>"}}
 """
 
+_USER_PROFILE_PROMPT = """\
+You are a user profile curator. A user just had a conversation with an AI assistant.
+Your job: identify any facts worth adding to the user's long-term profile (MEMORY.md).
+
+## What belongs in the user profile
+- Identity: name, occupation, location, languages spoken
+- Preferences: communication style, tool choices, output format preferences, topics of interest
+- Relationships: people, teams, or projects the user often refers to
+- Recurring constraints: timezone, hardware, access restrictions
+
+## What does NOT belong
+- Transient task details (file paths specific to this task, one-off requests)
+- Procedural steps (those go into procedural memory instead)
+- Facts already obviously in the existing profile (avoid duplicates)
+
+## Existing MEMORY.md
+{existing_memory}
+
+## Conversation
+{conversation}
+
+## Output format (strict JSON, no markdown fences)
+If there is new profile information worth adding:
+{{
+  "update": true,
+  "facts": ["<concise fact 1>", "<concise fact 2>"]
+}}
+
+If nothing new to add:
+{{"update": false}}
+"""
+
+_MEMORY_MERGE_PROMPT = """\
+You are updating a user's long-term profile file (MEMORY.md).
+
+## Current MEMORY.md content
+{existing_memory}
+
+## New facts to integrate
+{new_facts}
+
+## Instructions
+- Integrate the new facts naturally into the existing sections (User Information, Preferences, Project Context, Important Notes).
+- Add new section headings only if none of the existing sections fit.
+- Do not duplicate existing information.
+- Keep the file concise — remove or merge redundant lines.
+- Preserve the existing markdown structure and the footer line.
+
+Return the complete updated MEMORY.md content (no fences, raw markdown only).
+"""
+
 _MERGE_PROMPT = """\
 You are a procedural memory curator merging two versions of a procedure.
 
@@ -133,6 +184,7 @@ def _rrf_fuse(
     vector_hits: list[tuple[int, float]],   # (proc_id, cosine_sim desc)
     bm25_hits: list[tuple[int, float]],     # (proc_id, bm25_score asc — lower=better)
     top_k: int,
+    thresh: int
 ) -> list[int]:
     """Reciprocal Rank Fusion: returns proc_ids sorted by combined RRF score desc."""
     scores: dict[int, float] = {}
@@ -140,7 +192,7 @@ def _rrf_fuse(
         scores[pid] = scores.get(pid, 0.0) + 1.0 / (_RRF_K + rank)
     for rank, (pid, _) in enumerate(bm25_hits, start=1):
         scores[pid] = scores.get(pid, 0.0) + 1.0 / (_RRF_K + rank)
-    return [pid for pid, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)][:top_k]
+    return [pid for pid, sc in sorted(scores.items(), key=lambda x: x[1], reverse=True) if sc > thresh][:top_k]
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +254,7 @@ class ProceduralMemoryManager:
     # Retrieval (hybrid BM25 + vector + RRF)
     # ------------------------------------------------------------------
 
-    async def retrieve(self, user_message: str, user_id: str = "shared") -> list[Procedure]:
+    async def retrieve(self, user_message: str, user_id: str = "shared", thresh: int = 0.5) -> list[Procedure]:
         """
         Hybrid search: BM25 (FTS5) + vector (cosine) fused with RRF.
         Falls back to BM25-only when embedding model is not configured.
@@ -228,7 +280,8 @@ class ProceduralMemoryManager:
             return []
 
         # --- RRF fusion ---
-        fused_ids = _rrf_fuse(vector_hits, bm25_hits, top_k=self.config.top_k)
+        thresh = max(self.config.thresh, 0.5)
+        fused_ids = _rrf_fuse(vector_hits, bm25_hits, top_k=self.config.top_k, thresh=thresh)
 
         # --- Fetch full Procedure objects ---
         proc_map = self.store.get_by_ids(fused_ids)
@@ -362,3 +415,71 @@ class ProceduralMemoryManager:
             self.store.bump_usage(proc_id)
         except Exception as e:
             logger.warning("Procedural memory bump_usage failed: {}", e)
+
+    # ------------------------------------------------------------------
+    # User profile extraction → MEMORY.md
+    # ------------------------------------------------------------------
+
+    async def evaluate_user_profile(self, session_messages: list[dict], memory_store) -> None:
+        """Background task: extract user profile facts and merge into MEMORY.md."""
+        if not self.config.enabled:
+            return
+        try:
+            await self._run_evaluate_user_profile(session_messages, memory_store)
+        except Exception as e:
+            logger.warning("User profile evaluation failed: {}", e)
+
+    async def _run_evaluate_user_profile(self, session_messages: list[dict], memory_store) -> None:
+        conversation_text = _build_conversation_text(session_messages)
+        if not conversation_text.strip():
+            return
+
+        existing_memory = memory_store.read_long_term() or "(empty)"
+
+        eval_prompt = _USER_PROFILE_PROMPT.format(
+            existing_memory=existing_memory,
+            conversation=conversation_text,
+        )
+        response = await self.provider.chat(
+            messages=[
+                {"role": "system", "content": "You are a user profile curator. Respond only with valid JSON."},
+                {"role": "user", "content": eval_prompt},
+            ],
+            tools=[],
+            model=self.llm_model,
+            max_tokens=512,
+        )
+        raw = (response.content or "").strip()
+        if not raw:
+            return
+
+        data = _parse_json_response(raw)
+        if not data.get("update"):
+            logger.debug("User profile: no new facts to add.")
+            return
+
+        new_facts: list[str] = data.get("facts", [])
+        if not new_facts:
+            return
+
+        facts_text = "\n".join(f"- {f}" for f in new_facts)
+        merge_prompt = _MEMORY_MERGE_PROMPT.format(
+            existing_memory=existing_memory,
+            new_facts=facts_text,
+        )
+        merge_response = await self.provider.chat(
+            messages=[
+                {"role": "system", "content": "You are updating a MEMORY.md file. Return only the updated file content."},
+                {"role": "user", "content": merge_prompt},
+            ],
+            tools=[],
+            model=self.llm_model,
+            max_tokens=2048,
+        )
+        updated = (merge_response.content or "").strip()
+        if not updated:
+            logger.warning("User profile: merge LLM returned empty response; skipping.")
+            return
+
+        memory_store.write_long_term(updated)
+        logger.info("User profile: MEMORY.md updated with {} new fact(s).", len(new_facts))

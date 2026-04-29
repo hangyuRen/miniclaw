@@ -151,12 +151,12 @@ class AgentLoop:
             default_model=self.model,
             keep_recent_tool_messages=self._keep_recent_tool_messages,
         )
-        self.memory_compiler = MemoryCompiler(
-            workspace=workspace,
-            provider=provider,
-            config=self.memory_system_config,
-            default_model=self.model,
-        )
+        # self.memory_compiler = MemoryCompiler(
+        #     workspace=workspace,
+        #     provider=provider,
+        #     config=self.memory_system_config,
+        #     default_model=self.model,
+        # )
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
             provider=provider,
@@ -1153,10 +1153,11 @@ class AgentLoop:
         )
 
     async def _evaluate_procedural_memory(self, session_messages: list[dict], user_id: str) -> None:
-        """Background task: ask LLM to evaluate and potentially store/merge a procedure."""
+        """Background task: evaluate procedural memory and user profile after each turn."""
         if not self.procedural_memory:
             return
         await self.procedural_memory.evaluate_and_store(list(session_messages), user_id=user_id)
+        await self.procedural_memory.evaluate_user_profile(list(session_messages), self.context.memory)
 
     async def process_direct(
         self,
@@ -1188,7 +1189,7 @@ class AgentLoop:
         response = await self._process_message(msg)
         return response.content if response else ""
 
-    async def process_memory_daily_update(self, diary_path: Path, extracted_from: str | None = None) -> dict[str, int]:
-        """Run daily memory extraction+merge and refresh MEMORY.md."""
-        source = extracted_from or diary_path.name
-        return await self.memory_compiler.daily_update_from_file(diary_path, extracted_from=source)
+    # async def process_memory_daily_update(self, diary_path: Path, extracted_from: str | None = None) -> dict[str, int]:
+    #     """Run daily memory extraction+merge and refresh MEMORY.md."""
+    #     source = extracted_from or diary_path.name
+    #     return await self.memory_compiler.daily_update_from_file(diary_path, extracted_from=source)
