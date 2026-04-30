@@ -221,8 +221,8 @@ def gateway(
         feishu_config=config.channels.feishu,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
-    )
-    
+        tool_retry_config=config.tools.retry,
+    )    
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
@@ -344,6 +344,7 @@ def agent(
         procedural_memory_config=config.tools.procedural_memory,
         feishu_config=config.channels.feishu,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        tool_retry_config=config.tools.retry,
     )
 
     # --- Initialize channel senders for CLI mode ---
@@ -462,6 +463,7 @@ def memory_refresh(
         procedural_memory_config=config.tools.procedural_memory,
         feishu_config=config.channels.feishu,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        tool_retry_config=config.tools.retry,
     )
 
     diary_path = Path(diary).expanduser()

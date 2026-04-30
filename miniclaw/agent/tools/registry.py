@@ -1,54 +1,72 @@
 """Tool registry for dynamic tool management."""
 
+import asyncio
+import logging
 from typing import Any
 
 from miniclaw.agent.tools.base import Tool
+from miniclaw.config.schema import ToolRetryConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
-    """
-    Registry for agent tools.
-    
-    Allows dynamic registration and execution of tools.
-    """
-    
-    def __init__(self):
+    """Registry for agent tools."""
+
+    def __init__(self, retry_config: ToolRetryConfig | None=None):
         self._tools: dict[str, Tool] = {}
-    
+        self._retry_config = retry_config
+
     def register(self, tool: Tool) -> None:
-        """Register a tool."""
         self._tools[tool.name] = tool
-    
+
     def unregister(self, name: str) -> None:
-        """Unregister a tool by name."""
         self._tools.pop(name, None)
-    
+
     def get(self, name: str) -> Tool | None:
-        """Get a tool by name."""
         return self._tools.get(name)
-    
+
     def has(self, name: str) -> bool:
-        """Check if a tool is registered."""
         return name in self._tools
-    
+
     def get_definitions(self) -> list[dict[str, Any]]:
-        """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
-    
+
+    def _should_retry(self, name: str) -> bool:
+        cfg = self._retry_config
+        if cfg is None or not cfg.enabled or cfg.retry_attempts < 1:
+            return False
+        if cfg.retry_tools:
+            return name in cfg.retry_tools
+        return True
+
+    async def _execute_with_retry(self, tool: Tool, params: dict[str, Any]) -> str:
+        cfg = self._retry_config
+        max_attempts = max(1, cfg.retry_attempts)
+        backoff = max(0.0, cfg.retry_backoff_seconds)
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await tool.execute(**params)
+            except asyncio.TimeoutError as exc:
+                last_exc = exc
+                if attempt >= max_attempts:
+                    break
+                logger.warning(
+                    "Tool '%s' timed out (attempt %d/%d), retrying in %.1fs",
+                    tool.name, attempt, max_attempts, backoff,
+                )
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
+                backoff = min(
+                    max(0.0, cfg.retry_max_backoff_seconds),
+                    backoff * max(1.0, cfg.retry_backoff_multiplier),
+                )
+
+        raise last_exc
+
     async def execute(self, name: str, params: dict[str, Any]) -> str:
-        """
-        Execute a tool by name with given parameters.
-        
-        Args:
-            name: Tool name.
-            params: Tool parameters.
-        
-        Returns:
-            Tool execution result as string.
-        
-        Raises:
-            KeyError: If tool not found.
-        """
         tool = self._tools.get(name)
         if not tool:
             return f"Error: Tool '{name}' not found"
@@ -79,17 +97,19 @@ class ToolRegistry:
                         "for large files, write in multiple append_file chunks."
                     )
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
+
+            if self._should_retry(name):
+                return await self._execute_with_retry(tool, params)
             return await tool.execute(**params)
         except Exception as e:
             return f"Error executing {name}: {str(e)}"
-    
+
     @property
     def tool_names(self) -> list[str]:
-        """Get list of registered tool names."""
         return list(self._tools.keys())
-    
+
     def __len__(self) -> int:
         return len(self._tools)
-    
+
     def __contains__(self, name: str) -> bool:
         return name in self._tools

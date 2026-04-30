@@ -187,6 +187,16 @@ class ToolHistoryConfig(BaseModel):
     keep_recent_messages: int = 8
 
 
+class ToolRetryConfig(BaseModel):
+    """Exponential-backoff retry for tool calls that raise asyncio.TimeoutError."""
+    enabled: bool = False
+    retry_attempts: int = 3
+    retry_backoff_seconds: float = 1.0
+    retry_backoff_multiplier: float = 2.0
+    retry_max_backoff_seconds: float = 30.0
+    retry_tools: list[str] = Field(default_factory=list)  # empty = all tools
+
+
 class ContextCompressionConfig(BaseModel):
     """Conversation context compression configuration."""
     enabled: bool = False
@@ -254,6 +264,7 @@ class ToolsConfig(BaseModel):
     context_compression: ContextCompressionConfig = Field(default_factory=ContextCompressionConfig)
     memory_system: MemorySystemConfig = Field(default_factory=MemorySystemConfig)
     procedural_memory: ProceduralMemoryConfig = Field(default_factory=ProceduralMemoryConfig)
+    retry: ToolRetryConfig = Field(default_factory=ToolRetryConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
 
 

@@ -89,6 +89,7 @@ class AgentLoop:
         feishu_config: FeishuConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        tool_retry_config=None,
     ):
         from miniclaw.config.schema import ExecToolConfig
         from miniclaw.config.schema import FeishuConfig
@@ -99,6 +100,7 @@ class AgentLoop:
         from miniclaw.config.schema import NotionToolConfig
         from miniclaw.config.schema import ProceduralMemoryConfig
         from miniclaw.config.schema import ToolHistoryConfig
+        from miniclaw.config.schema import ToolRetryConfig
         from miniclaw.config.schema import WebSearchConfig
         from miniclaw.cron.service import CronService
         self.bus = bus
@@ -123,6 +125,7 @@ class AgentLoop:
         self.feishu_config = feishu_config or FeishuConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.tool_retry_config = tool_retry_config or ToolRetryConfig()
         legacy_keep_recent_tool = getattr(self.context_compression_config, "keep_recent_tool_messages", 0)
         self._keep_recent_tool_messages = max(
             0,
@@ -157,7 +160,7 @@ class AgentLoop:
         #     config=self.memory_system_config,
         #     default_model=self.model,
         # )
-        self.tools = ToolRegistry()
+        self.tools = ToolRegistry(retry_config=self.tool_retry_config)
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -1074,6 +1077,7 @@ class AgentLoop:
                 )
             )
         
+        last_message_idx = len(session.messages) - 1
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
         try:
             while iteration < self.max_iterations:
@@ -1128,15 +1132,15 @@ class AgentLoop:
         
         if final_content is None:
             final_content = "Background task completed."
+
+        # Procedural memory evaluation for system/cron tasks (opt-in)
+        if self.procedural_memory_config.evaluate_system_messages:
+            asyncio.create_task(self._evaluate_procedural_memory(session.messages[last_message_idx:], msg.sender_id))
         
         # Save to session (mark as system message in history)
         session.add_message("assistant", final_content)
         await self.compressor.compress_if_needed(session)
         self.sessions.save(session)
-
-        # Procedural memory evaluation for system/cron tasks (opt-in)
-        if self.procedural_memory_config.evaluate_system_messages:
-            asyncio.create_task(self._evaluate_procedural_memory(session.messages, "shared"))
 
         token_monitor = self._build_token_monitor(
             task_usage,
